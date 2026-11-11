@@ -1,17 +1,16 @@
 import SwiftUI
 
 enum Page: String, CaseIterable, Identifiable {
-    case focus, stats, history, categories, blocklist
+    case focus, stats, blocklist, settings
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .focus: "专注"
-        case .stats: "统计"
-        case .history: "记录"
-        case .categories: "分类"
-        case .blocklist: "锁定应用"
+        case .focus: tr("专注", "Focus")
+        case .stats: tr("统计", "Stats")
+        case .blocklist: tr("锁定应用", "Blocked Apps")
+        case .settings: tr("设置", "Settings")
         }
     }
 
@@ -19,9 +18,8 @@ enum Page: String, CaseIterable, Identifiable {
         switch self {
         case .focus: "timer"
         case .stats: "chart.pie"
-        case .history: "list.bullet.rectangle"
-        case .categories: "tag"
         case .blocklist: "lock.shield"
+        case .settings: "gearshape"
         }
     }
 }
@@ -43,7 +41,7 @@ struct ContentView: View {
             }
             .navigationSplitViewColumnWidth(min: 170, ideal: 190)
             .safeAreaInset(edge: .bottom) {
-                if timer.isActive {
+                if timer.isActive || timer.isResting {
                     SidebarStatus().padding(10)
                 }
             }
@@ -51,9 +49,8 @@ struct ContentView: View {
             switch page ?? .focus {
             case .focus: TimerView(goToBlocklist: { lastPage = .blocklist })
             case .stats: StatsView()
-            case .history: HistoryView()
-            case .categories: CategoriesView()
             case .blocklist: BlocklistView()
+            case .settings: SettingsView()
             }
         }
     }
@@ -65,12 +62,13 @@ private struct SidebarStatus: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(timer.state == .paused ? "已暂停" : "专注中")
+            Text(timer.isResting ? tr("休息中", "On a break")
+                 : timer.state == .paused ? tr("已暂停", "Paused") : tr("专注中", "Focusing"))
                 .font(.caption).foregroundStyle(.secondary)
             Text(timer.displayText)
                 .font(.title2.weight(.semibold)).monospacedDigit()
             if blocker.isActive {
-                Label("锁定中", systemImage: "lock.fill")
+                Label(tr("锁定中", "Locking"), systemImage: "lock.fill")
                     .font(.caption).foregroundStyle(.orange)
             }
         }

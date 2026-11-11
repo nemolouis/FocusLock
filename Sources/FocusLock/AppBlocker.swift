@@ -89,7 +89,7 @@ final class AppBlocker: ObservableObject {
             let now = Date()
             if let last = lastNotified[id], now.timeIntervalSince(last) < 5 { return }
             lastNotified[id] = now
-            Notifier.post(title: "🔒 \(name) 已被锁定", body: statusText())
+            Notifier.post(title: tr("🔒 \(name) 已被锁定", "🔒 \(name) is blocked"), body: statusText())
             NSApp.activate(ignoringOtherApps: true)
             NSApp.windows.first { $0.identifier?.rawValue == "main" || $0.title == "FocusLock" }?.makeKeyAndOrderFront(nil)
         }

@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import UserNotifications
 
@@ -8,6 +9,7 @@ final class AppModel {
     let store: Store
     let blocker: AppBlocker
     let timer: FocusTimer
+    private var appearanceSync: AnyCancellable?
 
     private init() {
         store = Store()
@@ -16,9 +18,20 @@ final class AppModel {
         blocker.blockedIds = { [unowned store] in Set(store.blockedApps.map(\.bundleId)) }
         blocker.statusText = { [unowned timer] in
             timer.mode == .countdown
-                ? "专注中，还剩 \(Fmt.clock(timer.remaining, roundUp: true))"
-                : "专注中，已专注 \(Fmt.clock(timer.elapsed, roundUp: false))"
+                ? tr("专注中，还剩 \(Fmt.clock(timer.remaining, roundUp: true))",
+                     "Focusing, \(Fmt.clock(timer.remaining, roundUp: true)) left")
+                : tr("专注中，已专注 \(Fmt.clock(timer.elapsed, roundUp: false))",
+                     "Focusing, \(Fmt.clock(timer.elapsed, roundUp: false)) so far")
         }
+    }
+
+    /// 浅色 / 深色模式作用于整个 App（窗口、菜单栏、弹窗）
+    func startAppearanceSync() {
+        NSApp.appearance = store.settings.appearance.nsAppearance
+        appearanceSync = store.$settings
+            .map(\.appearance)
+            .removeDuplicates()
+            .sink { NSApp.appearance = $0.nsAppearance }
     }
 }
 
@@ -28,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             UNUserNotificationCenter.current().delegate = self
         }
         Notifier.requestAuthorization()
+        AppModel.shared.startAppearanceSync()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -36,18 +50,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         if timer.isStrictLocked {
             let alert = NSAlert()
-            alert.messageText = "严格模式进行中"
-            alert.informativeText = "倒计时结束前不能退出 FocusLock。还剩 \(Fmt.clock(timer.remaining, roundUp: true))。"
-            alert.addButton(withTitle: "继续专注")
+            alert.messageText = tr("严格模式进行中", "Strict mode is on")
+            alert.informativeText = tr("倒计时结束前不能退出 FocusLock。还剩 \(Fmt.clock(timer.remaining, roundUp: true))。",
+                                       "You can't quit FocusLock until the countdown ends. \(Fmt.clock(timer.remaining, roundUp: true)) left.")
+            alert.addButton(withTitle: tr("继续专注", "Keep Focusing"))
             alert.runModal()
             return .terminateCancel
         }
 
         let alert = NSAlert()
-        alert.messageText = "正在专注，确定退出吗？"
-        alert.informativeText = "退出后计时停止、App 锁定解除。已专注满 1 分钟的时间会被保存。"
-        alert.addButton(withTitle: "继续专注")
-        alert.addButton(withTitle: "保存并退出")
+        alert.messageText = tr("正在专注，确定退出吗？", "Quit while focusing?")
+        alert.informativeText = tr("退出后计时停止、App 锁定解除。已专注满 1 分钟的时间会被保存。",
+                                   "The timer stops and app locking ends. Focus time of 1 minute or more is saved.")
+        alert.addButton(withTitle: tr("继续专注", "Keep Focusing"))
+        alert.addButton(withTitle: tr("保存并退出", "Save and Quit"))
         if alert.runModal() == .alertSecondButtonReturn {
             timer.saveOnQuit()
             return .terminateNow
@@ -75,25 +91,31 @@ struct FocusLockApp: App {
     @StateObject private var blocker = AppModel.shared.blocker
 
     var body: some Scene {
+        // 切换语言时用 id 让整个界面重建
+        let lang = store.settings.language.isEnglish ? "en" : "zh"
+
         Window("FocusLock", id: "main") {
             ContentView()
+                .id(lang)
+                .environment(\.locale, L10n.locale)
                 .environmentObject(store)
                 .environmentObject(timer)
                 .environmentObject(blocker)
-                .frame(minWidth: 860, minHeight: 620)
+                .frame(minWidth: 980, minHeight: 640)
         }
-        .defaultSize(width: 1000, height: 700)
+        .defaultSize(width: 1180, height: 760)
         .commands {
             CommandGroup(replacing: .newItem) {}
         }
 
         MenuBarExtra {
             MenuBarContent()
+                .id(lang)
                 .environmentObject(store)
                 .environmentObject(timer)
                 .environmentObject(blocker)
         } label: {
-            if timer.isActive {
+            if timer.isActive || timer.isResting {
                 Text(timer.menuBarText).monospacedDigit()
             } else {
                 Image(systemName: "timer")
@@ -109,31 +131,38 @@ struct MenuBarContent: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        if timer.isActive {
+        if timer.isResting {
+            Text(tr("休息中 \(timer.displayText)", "On a break \(timer.displayText)"))
+            Button(tr("跳过休息", "Skip Break")) { timer.skipRest() }
+        } else if timer.isActive {
             Text("\(store.categoryName(timer.categoryId)) · \(timer.mode.title) \(timer.displayText)")
-            if blocker.isActive { Text("🔒 正在锁定 \(store.blockedApps.count) 个应用") }
+            if blocker.isActive {
+                Text(tr("🔒 正在锁定 \(store.blockedApps.count) 个应用", "🔒 Locking \(store.blockedApps.count) apps"))
+            }
             Divider()
             if timer.isStrictLocked {
-                Text("严格模式：结束前无法停止")
+                Text(tr("严格模式：结束前无法停止", "Strict mode: can't stop until it ends"))
             } else {
                 if timer.state == .running {
-                    Button("暂停") { timer.pause() }
+                    Button(tr("暂停", "Pause")) { timer.pause() }
                 } else {
-                    Button("继续") { timer.resume() }
+                    Button(tr("继续", "Resume")) { timer.resume() }
                 }
-                Button("结束并保存") { timer.finish() }
+                Button(tr("结束并保存", "Finish and Save")) { timer.finish() }
             }
         } else {
-            Button("开始专注（\(timer.mode == .countdown ? "\(timer.countdownMinutes) 分钟倒计时" : "正计时")）") {
+            Button(timer.mode == .countdown
+                   ? tr("开始专注（\(timer.countdownMinutes) 分钟倒计时）", "Start Focus (\(timer.countdownMinutes)-min countdown)")
+                   : tr("开始专注（正计时）", "Start Focus (stopwatch)")) {
                 timer.start()
             }
         }
         Divider()
-        Button("打开 FocusLock") {
+        Button(tr("打开 FocusLock", "Open FocusLock")) {
             openWindow(id: "main")
             NSApp.activate(ignoringOtherApps: true)
         }
-        Button("退出") { NSApp.terminate(nil) }
+        Button(tr("退出", "Quit")) { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 }

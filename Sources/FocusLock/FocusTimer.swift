@@ -1,11 +1,11 @@
 import AppKit
 import Combine
 
-/// 番茄钟：倒计时 / 正计时，支持开始、暂停、继续、结束、放弃。
+/// 番茄钟：倒计时 / 正计时，支持开始、暂停、继续、结束、放弃；专注结束后自动休息。
 /// 时间基于时间戳计算，不会因为 Timer 抖动而漂移。
 @MainActor
 final class FocusTimer: ObservableObject {
-    enum State { case idle, running, paused }
+    enum State { case idle, running, paused, resting }
 
     struct Message: Equatable {
         let text: String
@@ -24,6 +24,8 @@ final class FocusTimer: ObservableObject {
     private var accumulated: Double = 0
     private var segmentStart: Date?
     private var startedAt: Date?
+    private var restStart: Date?
+    private(set) var restSeconds: Double = 5 * 60
     private var ticker: Timer?
     private var bag: Set<AnyCancellable> = []
 
@@ -50,7 +52,7 @@ final class FocusTimer: ObservableObject {
                 MainActor.assumeIsolated {
                     guard let self, self.state == .running else { return }
                     self.pause(force: true)
-                    self.show("电脑进入睡眠，已自动暂停")
+                    self.show(tr("电脑进入睡眠，已自动暂停", "Paused because the Mac went to sleep"))
                 }
             }
             .store(in: &bag)
@@ -58,7 +60,9 @@ final class FocusTimer: ObservableObject {
 
     // MARK: - 计算属性
 
-    var isActive: Bool { state != .idle }
+    /// 正在专注（含暂停），不包括休息
+    var isActive: Bool { state == .running || state == .paused }
+    var isResting: Bool { state == .resting }
 
     var elapsed: Double {
         let running = segmentStart.map { max(0, now.timeIntervalSince($0)) } ?? 0
@@ -67,9 +71,15 @@ final class FocusTimer: ObservableObject {
 
     var remaining: Double { max(0, targetSeconds - elapsed) }
 
+    var restRemaining: Double {
+        guard let restStart else { return 0 }
+        return max(0, restSeconds - now.timeIntervalSince(restStart))
+    }
+
     /// 表盘上显示的秒数
     var displaySeconds: Double {
         switch (state, mode) {
+        case (.resting, _): return restRemaining
         case (.idle, .countdown): return Double(countdownMinutes * 60)
         case (.idle, .countup): return 0
         case (_, .countdown): return remaining
@@ -77,10 +87,13 @@ final class FocusTimer: ObservableObject {
         }
     }
 
-    var displayText: String { Fmt.clock(displaySeconds, roundUp: mode == .countdown) }
+    var displayText: String {
+        Fmt.clock(displaySeconds, roundUp: isResting || mode == .countdown)
+    }
 
-    /// 0...1。倒计时为已完成比例；正计时每小时转一圈
+    /// 0...1。倒计时 / 休息为已完成比例；正计时每小时转一圈
     var progress: Double {
+        if isResting { return restSeconds > 0 ? min(1, 1 - restRemaining / restSeconds) : 0 }
         guard isActive else { return 0 }
         switch mode {
         case .countdown: return targetSeconds > 0 ? min(1, elapsed / targetSeconds) : 0
@@ -94,14 +107,16 @@ final class FocusTimer: ObservableObject {
     }
 
     var menuBarText: String {
+        if isResting { return "☕ \(displayText)" }
         let icon = mode == .countdown ? "🍅" : "⏱"
         return state == .paused ? "\(icon) ⏸ \(displayText)" : "\(icon) \(displayText)"
     }
 
-    // MARK: - 操作
+    // MARK: - 专注
 
     func start() {
-        guard state == .idle else { return }
+        guard state == .idle || state == .resting else { return }
+        if isResting { stopRest(notify: false) }
         let t = Date()
         targetSeconds = Double(max(1, countdownMinutes) * 60)
         accumulated = 0
@@ -138,20 +153,25 @@ final class FocusTimer: ObservableObject {
         updateLock()
     }
 
-    /// 提前结束并保存（不足 1 分钟不记录）
+    /// 提前结束并保存（不足 1 分钟不记录），保存了就进入休息
     func finish() {
         guard isActive, !isStrictLocked else { return }
         now = Date()
         let saved = record(completed: false)
         reset()
-        show(saved ? "已保存本次专注" : "不足 1 分钟，未记录")
+        if saved {
+            show(tr("已保存本次专注", "Session saved"))
+            startRest()
+        } else {
+            show(tr("不足 1 分钟，未记录", "Under 1 minute, not saved"))
+        }
     }
 
-    /// 放弃，不保存
+    /// 放弃，不保存，也不休息
     func abandon() {
         guard isActive, !isStrictLocked else { return }
         reset()
-        show("已放弃本次专注")
+        show(tr("已放弃本次专注", "Session discarded"))
     }
 
     /// 退出 App 前调用：无论模式都保存已专注的时间
@@ -162,6 +182,42 @@ final class FocusTimer: ObservableObject {
         reset()
         store.save()
     }
+
+    // MARK: - 休息（不记录、不锁定、结束后停下）
+
+    func startRest() {
+        guard store.settings.restEnabled, store.settings.restMinutes > 0 else { return }
+        restSeconds = Double(store.settings.restMinutes * 60)
+        restStart = Date()
+        now = restStart!
+        state = .resting
+        startTicker()
+        updateLock()
+    }
+
+    func skipRest() {
+        guard isResting else { return }
+        stopRest(notify: false)
+        show(tr("已跳过休息", "Break skipped"))
+    }
+
+    private func stopRest(notify: Bool) {
+        ticker?.invalidate()
+        ticker = nil
+        restStart = nil
+        state = .idle
+        now = Date()
+        updateLock()
+        if notify {
+            NSSound(named: "Glass")?.play()
+            Notifier.post(title: tr("休息结束 ☕", "Break is over ☕"),
+                          body: tr("准备好了就开始下一个专注吧", "Start your next focus session when you're ready"))
+            show(tr("休息结束", "Break is over"))
+            NSApp.requestUserAttention(.informationalRequest)
+        }
+    }
+
+    // MARK: - 锁定
 
     func updateLock() {
         let shouldLock = store.settings.lockEnabled
@@ -184,6 +240,8 @@ final class FocusTimer: ObservableObject {
         now = Date()
         if state == .running, mode == .countdown, elapsed >= targetSeconds {
             complete()
+        } else if state == .resting, restRemaining <= 0 {
+            stopRest(notify: true)
         }
     }
 
@@ -193,9 +251,15 @@ final class FocusTimer: ObservableObject {
         record(completed: true)
         reset()
         NSSound(named: "Glass")?.play()
-        Notifier.post(title: "番茄完成 🍅", body: "\(name) · 专注了 \(mins) 分钟，休息一下吧")
-        show("完成一个番茄！专注了 \(mins) 分钟")
+        let rest = store.settings.restEnabled && store.settings.restMinutes > 0
+        let restText = rest
+            ? tr("，休息 \(store.settings.restMinutes) 分钟吧", ". Take a \(store.settings.restMinutes)-minute break")
+            : ""
+        Notifier.post(title: tr("番茄完成 🍅", "Pomodoro done 🍅"),
+                      body: tr("\(name) · 专注了 \(mins) 分钟", "\(name) · \(mins) min focused") + restText)
+        show(tr("完成一个番茄！专注了 \(mins) 分钟", "Pomodoro done! \(mins) min focused"))
         NSApp.requestUserAttention(.informationalRequest)
+        startRest()
     }
 
     @discardableResult

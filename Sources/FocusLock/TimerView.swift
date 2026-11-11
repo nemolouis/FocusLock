@@ -10,7 +10,7 @@ struct TimerView: View {
     private let presets = [15, 25, 45, 60]
 
     private var accent: Color {
-        Color(hex: store.categoryColorHex(timer.categoryId))
+        timer.isResting ? Palette.rest : Color(hex: store.categoryColorHex(timer.categoryId))
     }
 
     var body: some View {
@@ -22,12 +22,14 @@ struct TimerView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .frame(width: 220)
-                .disabled(timer.isActive)
+                .disabled(timer.isActive || timer.isResting)
 
                 dial
 
                 if timer.isActive {
                     activeInfo
+                } else if timer.isResting {
+                    restInfo
                 } else {
                     setup
                 }
@@ -38,18 +40,16 @@ struct TimerView: View {
 
                 lockRow
                     .frame(maxWidth: 520)
-
-                TodaySummary()
-                    .frame(maxWidth: 520)
             }
             .padding(28)
             .frame(maxWidth: .infinity)
         }
-        .confirmationDialog("放弃本次专注？", isPresented: $confirmAbandon) {
-            Button("放弃，不保存", role: .destructive) { timer.abandon() }
-            Button("取消", role: .cancel) {}
+        .confirmationDialog(tr("放弃本次专注？", "Discard this session?"), isPresented: $confirmAbandon) {
+            Button(tr("放弃，不保存", "Discard"), role: .destructive) { timer.abandon() }
+            Button(tr("取消", "Cancel"), role: .cancel) {}
         } message: {
-            Text("已专注的 \(Fmt.duration(timer.elapsed)) 不会被记录。")
+            Text(tr("已专注的 \(Fmt.duration(timer.elapsed)) 不会被记录。",
+                    "\(Fmt.duration(timer.elapsed)) of focus won't be saved."))
         }
     }
 
@@ -65,6 +65,11 @@ struct TimerView: View {
                 .rotationEffect(.degrees(-90))
                 .animation(.linear(duration: 0.25), value: timer.progress)
             VStack(spacing: 6) {
+                if timer.isResting {
+                    Image(systemName: "cup.and.saucer.fill")
+                        .font(.title2)
+                        .foregroundStyle(accent)
+                }
                 Text(timer.displayText)
                     .font(.system(size: 64, weight: .light, design: .rounded))
                     .monospacedDigit()
@@ -80,9 +85,12 @@ struct TimerView: View {
 
     private var statusText: String {
         switch timer.state {
-        case .idle: return timer.mode == .countdown ? "准备开始一个番茄" : "正计时，随时结束"
-        case .running: return timer.mode == .countdown ? "专注中" : "已专注"
-        case .paused: return "已暂停"
+        case .idle:
+            return timer.mode == .countdown ? tr("准备开始一个番茄", "Ready for a pomodoro")
+                                            : tr("正计时，随时结束", "Stopwatch, stop any time")
+        case .running: return timer.mode == .countdown ? tr("专注中", "Focusing") : tr("已专注", "Focused")
+        case .paused: return tr("已暂停", "Paused")
+        case .resting: return tr("休息中", "On a break")
         }
     }
 
@@ -93,14 +101,14 @@ struct TimerView: View {
             if timer.mode == .countdown {
                 HStack(spacing: 8) {
                     ForEach(presets, id: \.self) { m in
-                        Button("\(m) 分钟") { timer.countdownMinutes = m }
+                        Button(Fmt.minutes(m)) { timer.countdownMinutes = m }
                             .buttonStyle(ChipStyle(selected: timer.countdownMinutes == m, color: accent))
                     }
                     Stepper(value: $timer.countdownMinutes, in: 1...240) {
                         if presets.contains(timer.countdownMinutes) {
-                            Text("自定义").foregroundStyle(.secondary)
+                            Text(tr("自定义", "Custom")).foregroundStyle(.secondary)
                         } else {
-                            Text("\(timer.countdownMinutes) 分钟").monospacedDigit().foregroundStyle(accent)
+                            Text(Fmt.minutes(timer.countdownMinutes)).monospacedDigit().foregroundStyle(accent)
                         }
                     }
                     .fixedSize()
@@ -108,14 +116,31 @@ struct TimerView: View {
                 }
             }
 
+            restSetting
+
             CategoryChips(selection: $timer.categoryId)
                 .frame(maxWidth: 560)
 
-            TextField("在做什么？（可选）", text: $timer.note)
+            TextField(tr("在做什么？（可选）", "What are you working on? (optional)"), text: $timer.note)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 320)
                 .onSubmit { timer.start() }
         }
+    }
+
+    /// 专注后自动休息：开关 + 时长
+    private var restSetting: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "cup.and.saucer.fill")
+                .foregroundStyle(store.settings.restEnabled ? Palette.rest : .secondary)
+            Toggle(tr("专注后休息", "Break after focus"), isOn: $store.settings.restEnabled)
+            Stepper(value: $store.settings.restMinutes, in: 1...60) {
+                Text(Fmt.minutes(store.settings.restMinutes)).monospacedDigit()
+            }
+            .fixedSize()
+            .disabled(!store.settings.restEnabled)
+        }
+        .font(.callout)
     }
 
     private var activeInfo: some View {
@@ -123,12 +148,21 @@ struct TimerView: View {
             CategoryDot(hex: store.categoryColorHex(timer.categoryId))
             Text(store.categoryName(timer.categoryId)).font(.headline)
             if !timer.note.isEmpty {
-                Text("· \(timer.note)").foregroundStyle(.secondary)
+                Text("· " + timer.note).foregroundStyle(.secondary)
             }
             if timer.mode == .countdown {
-                Text("· 目标 \(Int(timer.targetSeconds / 60)) 分钟").foregroundStyle(.secondary)
+                Text("· " + tr("目标 \(Int(timer.targetSeconds / 60)) 分钟", "Goal \(Int(timer.targetSeconds / 60)) min"))
+                    .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var restInfo: some View {
+        Text(tr("起来走走，喝口水。休息不计入记录，结束后会提醒你。",
+                "Stand up, stretch, drink some water. Breaks aren't recorded; you'll be notified when it ends."))
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: 420)
     }
 
     // MARK: 按钮
@@ -141,40 +175,50 @@ struct TimerView: View {
                 Button {
                     timer.start()
                 } label: {
-                    Label("开始专注", systemImage: "play.fill").frame(width: 160)
+                    Label(tr("开始专注", "Start Focus"), systemImage: "play.fill").frame(width: 160)
+                }
+                .buttonStyle(MainButtonStyle(color: accent))
+                .keyboardShortcut(.space, modifiers: [])
+
+            case .resting:
+                Button {
+                    timer.skipRest()
+                } label: {
+                    Label(tr("跳过休息", "Skip Break"), systemImage: "forward.end.fill").frame(width: 160)
                 }
                 .buttonStyle(MainButtonStyle(color: accent))
                 .keyboardShortcut(.space, modifiers: [])
 
             case .running, .paused:
                 if timer.isStrictLocked {
-                    Label("严格模式：倒计时结束前无法暂停或停止", systemImage: "lock.fill")
+                    Label(tr("严格模式：倒计时结束前无法暂停或停止", "Strict mode: can't pause or stop until the countdown ends"),
+                          systemImage: "lock.fill")
                         .foregroundStyle(.secondary)
                 } else {
                     if timer.state == .running {
                         Button { timer.pause() } label: {
-                            Label("暂停", systemImage: "pause.fill").frame(width: 110)
+                            Label(tr("暂停", "Pause"), systemImage: "pause.fill").frame(width: 110)
                         }
                         .buttonStyle(MainButtonStyle(color: accent))
                         .keyboardShortcut(.space, modifiers: [])
                     } else {
                         Button { timer.resume() } label: {
-                            Label("继续", systemImage: "play.fill").frame(width: 110)
+                            Label(tr("继续", "Resume"), systemImage: "play.fill").frame(width: 110)
                         }
                         .buttonStyle(MainButtonStyle(color: accent))
                         .keyboardShortcut(.space, modifiers: [])
                     }
                     Button { timer.finish() } label: {
-                        Label("结束", systemImage: "stop.fill").frame(width: 90)
+                        Label(tr("结束", "Finish"), systemImage: "stop.fill").frame(width: 90)
                     }
                     .buttonStyle(SecondaryButtonStyle())
-                    .help("结束并保存本次专注")
+                    .help(tr("结束并保存本次专注", "Finish and save this session"))
 
                     Button { confirmAbandon = true } label: {
-                        Label("放弃", systemImage: "xmark").frame(width: 90)
+                        Label(tr("放弃", "Discard"), systemImage: "xmark").frame(width: 90)
                     }
                     .buttonStyle(SecondaryButtonStyle())
-                    .help("放弃，不保存")
+                    .help(tr("放弃，不保存", "Discard without saving"))
                 }
             }
         }
@@ -186,7 +230,9 @@ struct TimerView: View {
     private var banners: some View {
         let now = timer.now
         if let b = blocker.lastBlocked, blocker.isActive, now.timeIntervalSince(b.date) < 5 {
-            Banner(icon: "lock.fill", text: "已拦截「\(b.name)」，先专注吧", color: .orange)
+            Banner(icon: "lock.fill",
+                   text: tr("已拦截「\(b.name)」，先专注吧", "Blocked \(b.name). Stay focused!"),
+                   color: .orange)
         } else if let m = timer.message, Date().timeIntervalSince(m.date) < 6 {
             Banner(icon: "checkmark.circle.fill", text: m.text, color: accent)
                 .task(id: m.date) {
@@ -202,67 +248,40 @@ struct TimerView: View {
     private var lockRow: some View {
         Card {
             HStack {
-                Image(systemName: blocker.isActive ? "lock.fill" : "lock.open")
-                    .font(.title3)
-                    .foregroundStyle(blocker.isActive ? .orange : .secondary)
-                    .frame(width: 28)
                 VStack(alignment: .leading, spacing: 2) {
-                    Toggle("专注时锁定应用", isOn: $store.settings.lockEnabled)
+                    Toggle(tr("专注时锁定应用", "Block apps while focusing"), isOn: $store.settings.lockEnabled)
                         .disabled(blocker.isActive)
                     Group {
                         if store.blockedApps.isEmpty {
-                            Text("还没有添加要锁定的应用")
+                            Text(tr("还没有添加要锁定的应用", "No apps added yet"))
                         } else if blocker.isActive {
-                            Text("正在锁定 \(store.blockedApps.count) 个应用 · 本次已拦截 \(blocker.blockedCount) 次")
+                            Text(tr("正在锁定 \(store.blockedApps.count) 个应用 · 本次已拦截 \(blocker.blockedCount) 次",
+                                    "Locking \(store.blockedApps.count) apps · blocked \(blocker.blockedCount) times"))
                         } else {
-                            Text(store.blockedApps.prefix(4).map(\.name).joined(separator: "、")
-                                 + (store.blockedApps.count > 4 ? " 等 \(store.blockedApps.count) 个" : ""))
+                            Text(store.blockedApps.prefix(4).map(\.name).joined(separator: tr("、", ", "))
+                                 + (store.blockedApps.count > 4
+                                    ? tr(" 等 \(store.blockedApps.count) 个", " and \(store.blockedApps.count - 4) more")
+                                    : ""))
                         }
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .padding(.leading, 20)
                 }
                 Spacer()
-                Button(store.blockedApps.isEmpty ? "添加应用" : "管理") { goToBlocklist() }
+                Button(store.blockedApps.isEmpty ? tr("添加应用", "Add Apps") : tr("管理", "Manage")) { goToBlocklist() }
             }
         }
     }
 }
 
-// MARK: - 今日概览
-
-struct TodaySummary: View {
-    @EnvironmentObject var store: Store
-
-    var body: some View {
-        let today = store.sessions(since: Calendar.current.startOfDay(for: Date()))
-        let total = today.reduce(0) { $0 + $1.seconds }
-        let tomatoes = today.filter { $0.mode == .countdown && $0.completed }.count
-        Card(title: "今天") {
-            HStack {
-                stat(Fmt.duration(total), "专注时长")
-                Divider().frame(height: 32)
-                stat("\(tomatoes)", "完成番茄")
-                Divider().frame(height: 32)
-                stat("\(today.count)", "专注次数")
-            }
-        }
-    }
-
-    private func stat(_ value: String, _ label: String) -> some View {
-        VStack(spacing: 4) {
-            Text(value).font(.title3.weight(.semibold)).monospacedDigit()
-            Text(label).font(.caption).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-
-// MARK: - 分类选择
+// MARK: - 分类选择 + 管理入口
 
 struct CategoryChips: View {
     @EnvironmentObject var store: Store
+    @EnvironmentObject var timer: FocusTimer
     @Binding var selection: UUID?
+    @State private var managing = false
 
     var body: some View {
         FlowLayout(spacing: 8) {
@@ -277,6 +296,20 @@ struct CategoryChips: View {
                 }
                 .buttonStyle(ChipStyle(selected: selection == c.id, color: c.color))
             }
+            Button {
+                managing = true
+            } label: {
+                Label(tr("管理分类", "Manage"), systemImage: "slider.horizontal.3")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(ChipStyle(selected: false, color: .secondary))
+            .help(tr("添加、重命名、改颜色、排序或删除分类", "Add, rename, recolor, reorder or delete categories"))
+        }
+        .sheet(isPresented: $managing) {
+            CategoryManagerSheet()
+                .environmentObject(store)
+                .environmentObject(timer)
+                .environment(\.locale, L10n.locale)
         }
     }
 }
@@ -284,6 +317,8 @@ struct CategoryChips: View {
 /// 自动换行布局
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8
+    /// true 每行居中，false 左对齐
+    var centered = true
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let rows = arrange(width: proposal.width ?? .infinity, subviews: subviews)
@@ -296,7 +331,7 @@ struct FlowLayout: Layout {
         let rows = arrange(width: bounds.width, subviews: subviews)
         var y = bounds.minY
         for row in rows {
-            var x = bounds.minX + (bounds.width - row.width) / 2 // 居中
+            var x = bounds.minX + (centered ? (bounds.width - row.width) / 2 : 0)
             for i in row.indices {
                 let s = subviews[i].sizeThatFits(.unspecified)
                 subviews[i].place(at: CGPoint(x: x, y: y), proposal: .unspecified)

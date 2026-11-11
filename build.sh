@@ -25,12 +25,14 @@ EOF
 fi
 
 ARCH="$(uname -m)"
+# 模块缓存里记录了绝对路径，项目文件夹改名或移动后旧缓存会失效，所以按路径分开存
+CACHE="$BUILD/ModuleCache-$(printf '%s' "$PWD" | shasum | cut -c1-8)"
 echo "▸ 编译 ($ARCH)…"
 swiftc \
   -O -swift-version 5 \
   -target "$ARCH-apple-macosx14.0" \
   -module-name FocusLock \
-  -module-cache-path "$BUILD/ModuleCache" \
+  -module-cache-path "$CACHE" \
   ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"} \
   Sources/FocusLock/*.swift \
   -o "$BUILD/FocusLock"
@@ -40,16 +42,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BUILD/FocusLock" "$APP/Contents/MacOS/FocusLock"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
-
-if [[ ! -f "$BUILD/AppIcon.icns" ]]; then
-  echo "▸ 生成图标…"
-  swiftc ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"} -module-cache-path "$BUILD/ModuleCache" \
-    scripts/make_icon.swift -o "$BUILD/make_icon"
-  rm -rf "$BUILD/AppIcon.iconset"
-  "$BUILD/make_icon" "$BUILD/AppIcon.iconset"
-  iconutil -c icns "$BUILD/AppIcon.iconset" -o "$BUILD/AppIcon.icns"
-fi
-cp "$BUILD/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 codesign --force --sign - "$APP" >/dev/null
 echo "✓ 完成: $PWD/$APP"
