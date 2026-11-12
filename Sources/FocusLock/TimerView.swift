@@ -63,7 +63,6 @@ struct TimerView: View {
                 .trim(from: 0, to: timer.progress)
                 .stroke(accent, style: StrokeStyle(lineWidth: 16, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .animation(.linear(duration: 0.25), value: timer.progress)
             VStack(spacing: 6) {
                 if timer.isResting {
                     Image(systemName: "cup.and.saucer.fill")
@@ -73,7 +72,6 @@ struct TimerView: View {
                 Text(timer.displayText)
                     .font(.system(size: 64, weight: .light, design: .rounded))
                     .monospacedDigit()
-                    .contentTransition(.numericText())
                 Text(statusText)
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -228,15 +226,18 @@ struct TimerView: View {
 
     @ViewBuilder
     private var banners: some View {
-        let now = timer.now
-        if let b = blocker.lastBlocked, blocker.isActive, now.timeIntervalSince(b.date) < 5 {
+        // 提示条到时间后由 task 触发一次重绘来消失，不依赖计时器刷新（暂停、空闲时也能消失）
+        if let b = blocker.lastBlocked, blocker.isActive, Date().timeIntervalSince(b.date) < 5 {
             Banner(icon: "lock.fill",
                    text: tr("已拦截「\(b.name)」，先专注吧", "Blocked \(b.name). Stay focused!"),
                    color: .orange)
+                .task(id: b.date) {
+                    try? await Task.sleep(for: .seconds(5))
+                    blocker.objectWillChange.send()
+                }
         } else if let m = timer.message, Date().timeIntervalSince(m.date) < 6 {
             Banner(icon: "checkmark.circle.fill", text: m.text, color: accent)
                 .task(id: m.date) {
-                    // 空闲时 now 不再刷新，用 task 让提示自动消失
                     try? await Task.sleep(for: .seconds(6))
                     timer.objectWillChange.send()
                 }

@@ -6,7 +6,20 @@ import AppKit
 enum MenuBarIcon {
     private static let iconSize = NSSize(width: 16, height: 18)
 
+    /// 同样的状态和文字只画一次（菜单栏图标每秒都会被询问，文字一分钟才变一次）
+    @MainActor private static var cache: [String: NSImage] = [:]
+
+    @MainActor
     static func image(locked: Bool, text: String? = nil) -> NSImage {
+        let key = "\(locked)|\(text ?? "")"
+        if let cached = cache[key] { return cached }
+        if cache.count > 200 { cache.removeAll() }
+        let image = makeImage(locked: locked, text: text)
+        cache[key] = image
+        return image
+    }
+
+    private static func makeImage(locked: Bool, text: String?) -> NSImage {
         let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
         let textSize = text.map { ($0 as NSString).size(withAttributes: attrs) } ?? .zero

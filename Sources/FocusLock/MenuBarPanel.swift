@@ -267,21 +267,29 @@ struct MenuBarPanel: View {
         Text(timer.displayText)
             .font(.system(size: 46, weight: .light, design: .rounded))
             .monospacedDigit()
-            .contentTransition(.numericText())
     }
 
     // MARK: 提示和底部
 
     @ViewBuilder
     private var messageLine: some View {
-        if let b = blocker.lastBlocked, blocker.isActive, timer.now.timeIntervalSince(b.date) < 5 {
+        // 到时间后由 task 触发一次重绘来消失，不依赖计时器刷新
+        if let b = blocker.lastBlocked, blocker.isActive, Date().timeIntervalSince(b.date) < 5 {
             Label(tr("已拦截「\(b.name)」", "Blocked \(b.name)"), systemImage: "lock.fill")
                 .font(.caption)
                 .foregroundStyle(.orange)
+                .task(id: b.date) {
+                    try? await Task.sleep(for: .seconds(5))
+                    blocker.objectWillChange.send()
+                }
         } else if let m = timer.message, Date().timeIntervalSince(m.date) < 6 {
             Label(m.text, systemImage: "checkmark.circle.fill")
                 .font(.caption)
                 .foregroundStyle(accent)
+                .task(id: m.date) {
+                    try? await Task.sleep(for: .seconds(6))
+                    timer.objectWillChange.send()
+                }
         }
     }
 

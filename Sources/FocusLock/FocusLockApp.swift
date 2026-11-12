@@ -33,7 +33,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
         })
 
-        // 设置了「启动时不打开主窗口」：只在菜单栏运行
+        // 设置了「启动时打开主窗口」：系统可能按上次退出时的状态不恢复窗口（比如上次是只在菜单栏运行），
+        // 这里确保窗口一定打开
+        if model.store.settings.showWindowOnLaunch {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                MainActor.assumeIsolated {
+                    if !AppModel.shared.mainWindowVisible { AppModel.shared.showMainWindow() }
+                }
+            }
+        }
+
+        // 设置了「启动时不打开主窗口」：只在菜单栏运行（macOS 15+ 根本不会创建窗口，这里是 macOS 14 的兜底）
         if !model.store.settings.showWindowOnLaunch {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
@@ -92,40 +102,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 }
 
+/// 入口：macOS 15+ 支持「启动时不创建主窗口」（只在菜单栏运行时省下整套界面的内存），
+/// macOS 14 没有这个接口，用普通版本，由 AppDelegate 在启动后关窗口
 @main
-struct FocusLockApp: App {
+enum FocusLockMain {
+    static func main() {
+        if #available(macOS 15.0, *) {
+            FocusLockApp15.main()
+        } else {
+            FocusLockApp14.main()
+        }
+    }
+}
+
+@available(macOS 15.0, *)
+struct FocusLockApp15: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    // 只观察 store（切换语言要重建界面）；计时器每秒都在变，不在这里观察，否则每秒整个 App 都要重算
     @StateObject private var store = AppModel.shared.store
-    @StateObject private var timer = AppModel.shared.timer
-    @StateObject private var blocker = AppModel.shared.blocker
 
     var body: some Scene {
-        // 切换语言时用 id 让整个界面重建
         let lang = store.settings.language.isEnglish ? "en" : "zh"
+        AppScenes.mainWindow(store: store, lang: lang)
+            .defaultLaunchBehavior(store.settings.showWindowOnLaunch ? .presented : .suppressed)
+            // 不按上次退出时的状态恢复主窗口，是否打开只看「启动时打开主窗口」（窗口大小位置仍会记住）
+            .restorationBehavior(.disabled)
+        AppScenes.menuBar(store: store, lang: lang)
+    }
+}
 
+struct FocusLockApp14: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @StateObject private var store = AppModel.shared.store
+
+    var body: some Scene {
+        let lang = store.settings.language.isEnglish ? "en" : "zh"
+        AppScenes.mainWindow(store: store, lang: lang)
+        AppScenes.menuBar(store: store, lang: lang)
+    }
+}
+
+@MainActor
+enum AppScenes {
+    /// 主窗口。切换语言时用 id(lang) 让整个界面重建
+    static func mainWindow(store: Store, lang: String) -> some Scene {
         Window("FocusLock", id: "main") {
             ContentView()
                 .id(lang)
                 .environment(\.locale, L10n.locale)
                 .environmentObject(store)
-                .environmentObject(timer)
-                .environmentObject(blocker)
+                .environmentObject(AppModel.shared.timer)
+                .environmentObject(AppModel.shared.blocker)
                 .frame(minWidth: 980, minHeight: 640)
         }
         .defaultSize(width: 1180, height: 760)
         .commands {
             CommandGroup(replacing: .newItem) {}
         }
+    }
 
+    static func menuBar(store: Store, lang: String) -> some Scene {
         MenuBarExtra {
             MenuBarPanel()
                 .id(lang)
                 .environment(\.locale, L10n.locale)
                 .environmentObject(store)
-                .environmentObject(timer)
-                .environmentObject(blocker)
+                .environmentObject(AppModel.shared.timer)
+                .environmentObject(AppModel.shared.blocker)
         } label: {
-            MenuBarLabel(timer: timer)
+            MenuBarLabel(timer: AppModel.shared.timer)
         }
         .menuBarExtraStyle(.window)
     }
@@ -144,3 +189,4 @@ struct MenuBarLabel: View {
             }
     }
 }
+

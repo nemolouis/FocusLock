@@ -27,6 +27,7 @@ final class FocusTimer: ObservableObject {
     private var restStart: Date?
     private(set) var restSeconds: Double = 5 * 60
     private var ticker: Timer?
+    private var lastShownSecond = -1
     private var bag: Set<AnyCancellable> = []
 
     private let store: Store
@@ -64,26 +65,29 @@ final class FocusTimer: ObservableObject {
     var isActive: Bool { state == .running || state == .paused }
     var isResting: Bool { state == .resting }
 
-    var elapsed: Double {
-        let running = segmentStart.map { max(0, now.timeIntervalSince($0)) } ?? 0
-        return accumulated + running
-    }
-
+    var elapsed: Double { elapsed(at: now) }
     var remaining: Double { max(0, targetSeconds - elapsed) }
-
-    var restRemaining: Double {
-        guard let restStart else { return 0 }
-        return max(0, restSeconds - now.timeIntervalSince(restStart))
-    }
+    var restRemaining: Double { restRemaining(at: now) }
 
     /// 表盘上显示的秒数
-    var displaySeconds: Double {
+    var displaySeconds: Double { displaySeconds(at: now) }
+
+    private func elapsed(at t: Date) -> Double {
+        accumulated + (segmentStart.map { max(0, t.timeIntervalSince($0)) } ?? 0)
+    }
+
+    private func restRemaining(at t: Date) -> Double {
+        guard let restStart else { return 0 }
+        return max(0, restSeconds - t.timeIntervalSince(restStart))
+    }
+
+    private func displaySeconds(at t: Date) -> Double {
         switch (state, mode) {
-        case (.resting, _): return restRemaining
+        case (.resting, _): return restRemaining(at: t)
         case (.idle, .countdown): return Double(countdownMinutes * 60)
         case (.idle, .countup): return 0
-        case (_, .countdown): return remaining
-        case (_, .countup): return elapsed
+        case (_, .countdown): return max(0, targetSeconds - elapsed(at: t))
+        case (_, .countup): return elapsed(at: t)
         }
     }
 
@@ -152,6 +156,7 @@ final class FocusTimer: ObservableObject {
         segmentStart = t
         now = t
         state = .running
+        startTicker()   // 暂停后相位变了，重新对齐到秒
         updateLock()
     }
 
@@ -229,21 +234,43 @@ final class FocusTimer: ObservableObject {
 
     // MARK: - 内部
 
+    /// 每秒醒一次。第一次触发对齐到「显示的秒数正好变化」的时刻，
+    /// 这样数字均匀跳动、不会漏秒，倒计时也正好在 0 秒时结束
     private func startTicker() {
         ticker?.invalidate()
-        let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+        let t = Date()
+        let passed: Double   // 当前这一段已经走过的秒数（取小数部分来对齐）
+        switch state {
+        case .running: passed = elapsed(at: t)
+        case .resting: passed = restStart.map { t.timeIntervalSince($0) } ?? 0
+        default: passed = 0
+        }
+        let frac = passed - passed.rounded(.down)
+        let firstFire = t.addingTimeInterval(1 - frac + 0.02)
+        let timer = Timer(fire: firstFire, interval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
-        RunLoop.main.add(t, forMode: .common)
-        ticker = t
+        timer.tolerance = 0.05
+        RunLoop.main.add(timer, forMode: .common)
+        ticker = timer
     }
 
+    /// 每秒检查一次是否到点；显示的秒数变了才更新 now（通知界面重绘），暂停时不重绘
     private func tick() {
-        now = Date()
-        if state == .running, mode == .countdown, elapsed >= targetSeconds {
+        let t = Date()
+        if state == .running, mode == .countdown, elapsed(at: t) >= targetSeconds {
+            now = t
             complete()
-        } else if state == .resting, restRemaining <= 0 {
+        } else if state == .resting, restRemaining(at: t) <= 0 {
+            now = t
             stopRest(notify: true)
+        } else {
+            let up = isResting || mode == .countdown
+            let shown = Int(displaySeconds(at: t).rounded(up ? .up : .down))
+            if shown != lastShownSecond {
+                lastShownSecond = shown
+                now = t
+            }
         }
     }
 
