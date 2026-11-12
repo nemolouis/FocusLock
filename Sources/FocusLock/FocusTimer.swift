@@ -106,10 +106,12 @@ final class FocusTimer: ObservableObject {
         store.settings.strictMode && mode == .countdown && isActive
     }
 
-    var menuBarText: String {
-        if isResting { return "☕ \(displayText)" }
-        let icon = mode == .countdown ? "🍅" : "⏱"
-        return state == .paused ? "\(icon) ⏸ \(displayText)" : "\(icon) \(displayText)"
+    /// 菜单栏只显示分钟：倒计时 / 休息向上取整（剩 24:10 显示 25），正计时向下取整；超过 1 小时显示 1:05
+    var menuBarMinutesText: String {
+        let up = isResting || mode == .countdown
+        let mins = max(0, Int(up ? (displaySeconds / 60).rounded(.up) : (displaySeconds / 60).rounded(.down)))
+        let text = mins >= 60 ? String(format: "%d:%02d", mins / 60, mins % 60) : tr("\(mins)分", "\(mins)m")
+        return state == .paused ? text + " ‖" : text
     }
 
     // MARK: - 专注

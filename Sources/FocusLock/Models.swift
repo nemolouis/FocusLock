@@ -129,6 +129,8 @@ struct AppSettings: Codable, Equatable {
     var restMinutes = 5
     var language: AppLanguage = .system
     var appearance: AppAppearance = .system
+    /// 启动时是否打开主窗口；关掉就只在菜单栏运行
+    var showWindowOnLaunch = true
 
     init() {}
 
@@ -147,6 +149,7 @@ struct AppSettings: Codable, Equatable {
         // 之前的版本只有中文：老用户升级后保持中文，新安装才跟随系统
         language = try c.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .zh
         appearance = try c.decodeIfPresent(AppAppearance.self, forKey: .appearance) ?? d.appearance
+        showWindowOnLaunch = try c.decodeIfPresent(Bool.self, forKey: .showWindowOnLaunch) ?? d.showWindowOnLaunch
     }
 }
 

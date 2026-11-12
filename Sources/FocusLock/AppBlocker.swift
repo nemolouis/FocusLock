@@ -85,13 +85,15 @@ final class AppBlocker: ObservableObject {
         lastBlocked = BlockEvent(name: name, date: Date())
 
         if reason != .sweep {
-            // 同一个 App 5 秒内只提醒一次，并把专注窗口拉到前台
+            // 同一个 App 5 秒内只提醒一次；主窗口开着就拉到前台，只在菜单栏运行时只发通知
             let now = Date()
             if let last = lastNotified[id], now.timeIntervalSince(last) < 5 { return }
             lastNotified[id] = now
             Notifier.post(title: tr("🔒 \(name) 已被锁定", "🔒 \(name) is blocked"), body: statusText())
-            NSApp.activate(ignoringOtherApps: true)
-            NSApp.windows.first { $0.identifier?.rawValue == "main" || $0.title == "FocusLock" }?.makeKeyAndOrderFront(nil)
+            if let w = NSApp.windows.first(where: { AppModel.isMainWindow($0) && $0.isVisible }) {
+                NSApp.activate(ignoringOtherApps: true)
+                w.makeKeyAndOrderFront(nil)
+            }
         }
     }
 }

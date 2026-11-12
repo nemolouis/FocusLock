@@ -1,53 +1,62 @@
-import Combine
 import SwiftUI
 import UserNotifications
 
-@MainActor
-final class AppModel {
-    static let shared = AppModel()
-
-    let store: Store
-    let blocker: AppBlocker
-    let timer: FocusTimer
-    private var appearanceSync: AnyCancellable?
-
-    private init() {
-        store = Store()
-        blocker = AppBlocker()
-        timer = FocusTimer(store: store, blocker: blocker)
-        blocker.blockedIds = { [unowned store] in Set(store.blockedApps.map(\.bundleId)) }
-        blocker.statusText = { [unowned timer] in
-            timer.mode == .countdown
-                ? tr("专注中，还剩 \(Fmt.clock(timer.remaining, roundUp: true))",
-                     "Focusing, \(Fmt.clock(timer.remaining, roundUp: true)) left")
-                : tr("专注中，已专注 \(Fmt.clock(timer.elapsed, roundUp: false))",
-                     "Focusing, \(Fmt.clock(timer.elapsed, roundUp: false)) so far")
-        }
-    }
-
-    /// 浅色 / 深色模式作用于整个 App（窗口、菜单栏、弹窗）
-    func startAppearanceSync() {
-        NSApp.appearance = store.settings.appearance.nsAppearance
-        appearanceSync = store.$settings
-            .map(\.appearance)
-            .removeDuplicates()
-            .sink { NSApp.appearance = $0.nsAppearance }
-    }
-}
-
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+    private var observers: [NSObjectProtocol] = []
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         if Notifier.available {
             UNUserNotificationCenter.current().delegate = self
         }
         Notifier.requestAuthorization()
-        AppModel.shared.startAppearanceSync()
+        let model = AppModel.shared
+        model.startAppearanceSync()
+
+        // 主窗口出现时显示程序坞图标，全部关掉后只留在菜单栏
+        let nc = NotificationCenter.default
+        // queue: .main 保证回调在主线程，用 assumeIsolated 告诉编译器
+        observers.append(nc.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { note in
+            let window = note.object as? NSWindow
+            MainActor.assumeIsolated {
+                guard let window, AppModel.isMainWindow(window) else { return }
+                AppModel.shared.updateActivationPolicy()
+            }
+        })
+        observers.append(nc.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { note in
+            let window = note.object as? NSWindow
+            MainActor.assumeIsolated {
+                guard let window, AppModel.isMainWindow(window) else { return }
+                // 等窗口真正关掉后再判断
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated { AppModel.shared.updateActivationPolicy() }
+                }
+            }
+        })
+
+        // 设置了「启动时不打开主窗口」：只在菜单栏运行
+        if !model.store.settings.showWindowOnLaunch {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    NSApp.windows.filter(AppModel.isMainWindow).forEach { $0.close() }
+                    AppModel.shared.updateActivationPolicy()
+                }
+            }
+        }
     }
+
+    /// 在访达 / 启动台里再次打开 App 时，把主窗口拿出来
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { AppModel.shared.showMainWindow() }
+        return true
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let timer = AppModel.shared.timer
         guard timer.isActive else { return .terminateNow }
 
+        NSApp.activate(ignoringOtherApps: true)
         if timer.isStrictLocked {
             let alert = NSAlert()
             alert.messageText = tr("严格模式进行中", "Strict mode is on")
@@ -109,60 +118,29 @@ struct FocusLockApp: App {
         }
 
         MenuBarExtra {
-            MenuBarContent()
+            MenuBarPanel()
                 .id(lang)
+                .environment(\.locale, L10n.locale)
                 .environmentObject(store)
                 .environmentObject(timer)
                 .environmentObject(blocker)
         } label: {
-            if timer.isActive || timer.isResting {
-                Text(timer.menuBarText).monospacedDigit()
-            } else {
-                Image(systemName: "timer")
-            }
+            MenuBarLabel(timer: timer)
         }
+        .menuBarExtraStyle(.window)
     }
 }
 
-struct MenuBarContent: View {
-    @EnvironmentObject var timer: FocusTimer
-    @EnvironmentObject var store: Store
-    @EnvironmentObject var blocker: AppBlocker
+/// 菜单栏图标：未计时是开着的番茄锁；专注中上锁并显示剩余（或已专注）分钟
+struct MenuBarLabel: View {
+    @ObservedObject var timer: FocusTimer
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        if timer.isResting {
-            Text(tr("休息中 \(timer.displayText)", "On a break \(timer.displayText)"))
-            Button(tr("跳过休息", "Skip Break")) { timer.skipRest() }
-        } else if timer.isActive {
-            Text("\(store.categoryName(timer.categoryId)) · \(timer.mode.title) \(timer.displayText)")
-            if blocker.isActive {
-                Text(tr("🔒 正在锁定 \(store.blockedApps.count) 个应用", "🔒 Locking \(store.blockedApps.count) apps"))
+        let text = timer.isActive || timer.isResting ? timer.menuBarMinutesText : nil
+        Image(nsImage: MenuBarIcon.image(locked: timer.isActive, text: text))
+            .onAppear {
+                AppModel.shared.openMainWindowAction = { openWindow(id: "main") }
             }
-            Divider()
-            if timer.isStrictLocked {
-                Text(tr("严格模式：结束前无法停止", "Strict mode: can't stop until it ends"))
-            } else {
-                if timer.state == .running {
-                    Button(tr("暂停", "Pause")) { timer.pause() }
-                } else {
-                    Button(tr("继续", "Resume")) { timer.resume() }
-                }
-                Button(tr("结束并保存", "Finish and Save")) { timer.finish() }
-            }
-        } else {
-            Button(timer.mode == .countdown
-                   ? tr("开始专注（\(timer.countdownMinutes) 分钟倒计时）", "Start Focus (\(timer.countdownMinutes)-min countdown)")
-                   : tr("开始专注（正计时）", "Start Focus (stopwatch)")) {
-                timer.start()
-            }
-        }
-        Divider()
-        Button(tr("打开 FocusLock", "Open FocusLock")) {
-            openWindow(id: "main")
-            NSApp.activate(ignoringOtherApps: true)
-        }
-        Button(tr("退出", "Quit")) { NSApp.terminate(nil) }
-            .keyboardShortcut("q")
     }
 }
