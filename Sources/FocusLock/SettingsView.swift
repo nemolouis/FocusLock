@@ -56,6 +56,32 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
+                Card(title: tr("菜单栏面板", "Menu Bar Panel")) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(tr("选择点开菜单栏图标后显示哪些设置。隐藏的项目仍按当前设置生效，可以在主窗口里修改。",
+                                "Choose which settings appear when you click the menu bar icon. Hidden items keep their current values and can still be changed in the main window."))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if store.settings.menuBar != MenuBarOptions() {
+                            Button(tr("全部显示", "Show All")) { store.settings.menuBar = MenuBarOptions() }
+                                .buttonStyle(.link)
+                                .font(.caption)
+                        }
+                    }
+                    LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)],
+                              alignment: .leading, spacing: 8) {
+                        Toggle(tr("计时模式（倒计时 / 正计时）", "Timer mode (countdown / stopwatch)"), isOn: $store.settings.menuBar.showMode)
+                        Toggle(tr("倒计时时长", "Countdown length"), isOn: $store.settings.menuBar.showDuration)
+                        Toggle(tr("分类", "Category"), isOn: $store.settings.menuBar.showCategory)
+                        Toggle(tr("专注时锁定应用", "Block apps"), isOn: $store.settings.menuBar.showBlock)
+                        Toggle(tr("严格模式", "Strict mode"), isOn: $store.settings.menuBar.showStrict)
+                        Toggle(tr("专注后休息", "Break after focus"), isOn: $store.settings.menuBar.showBreak)
+                        Toggle(tr("顶部的今日专注时长", "Today's total at the top"), isOn: $store.settings.menuBar.showToday)
+                    }
+                    .toggleStyle(.checkbox)
+                }
+
                 Card(title: tr("休息", "Breaks")) {
                     Toggle(tr("每次专注结束后自动休息", "Start a break after each focus session"),
                            isOn: $store.settings.restEnabled)

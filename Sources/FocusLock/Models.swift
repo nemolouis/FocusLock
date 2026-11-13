@@ -118,6 +118,31 @@ struct BlockedApp: Identifiable, Codable, Hashable {
     var id: String { bundleId }
 }
 
+/// 菜单栏面板里显示哪些设置项（隐藏后设置仍按当前值生效）
+struct MenuBarOptions: Codable, Equatable {
+    var showMode = true        // 倒计时 / 正计时
+    var showDuration = true    // 倒计时时长
+    var showCategory = true    // 分类
+    var showBlock = true       // 锁定应用
+    var showStrict = true      // 严格模式
+    var showBreak = true       // 专注后休息
+    var showToday = true       // 顶部的今日专注时长
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func get(_ k: CodingKeys) throws -> Bool { try c.decodeIfPresent(Bool.self, forKey: k) ?? true }
+        showMode = try get(.showMode)
+        showDuration = try get(.showDuration)
+        showCategory = try get(.showCategory)
+        showBlock = try get(.showBlock)
+        showStrict = try get(.showStrict)
+        showBreak = try get(.showBreak)
+        showToday = try get(.showToday)
+    }
+}
+
 struct AppSettings: Codable, Equatable {
     var lockEnabled = true
     var lockWhilePaused = true
@@ -131,6 +156,7 @@ struct AppSettings: Codable, Equatable {
     var appearance: AppAppearance = .system
     /// 启动时是否打开主窗口；关掉就只在菜单栏运行
     var showWindowOnLaunch = true
+    var menuBar = MenuBarOptions()
 
     init() {}
 
@@ -150,6 +176,7 @@ struct AppSettings: Codable, Equatable {
         language = try c.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .zh
         appearance = try c.decodeIfPresent(AppAppearance.self, forKey: .appearance) ?? d.appearance
         showWindowOnLaunch = try c.decodeIfPresent(Bool.self, forKey: .showWindowOnLaunch) ?? d.showWindowOnLaunch
+        menuBar = try c.decodeIfPresent(MenuBarOptions.self, forKey: .menuBar) ?? d.menuBar
     }
 }
 

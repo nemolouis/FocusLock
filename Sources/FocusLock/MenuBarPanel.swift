@@ -8,6 +8,9 @@ struct MenuBarPanel: View {
     @State private var confirmDiscard = false
     private let presets = [15, 25, 45, 60]
 
+    /// 设置里选择要显示的项目
+    private var show: MenuBarOptions { store.settings.menuBar }
+
     private var accent: Color {
         timer.isResting ? Palette.rest : Color(hex: store.categoryColorHex(timer.categoryId))
     }
@@ -41,10 +44,12 @@ struct MenuBarPanel: View {
             Image(nsImage: MenuBarIcon.image(locked: timer.isActive))
             Text("FocusLock").font(.headline)
             Spacer()
-            Text(todaySummary)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
+            if show.showToday {
+                Text(todaySummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
         }
     }
 
@@ -58,13 +63,15 @@ struct MenuBarPanel: View {
 
     private var setupSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Picker("", selection: $timer.mode) {
-                ForEach(TimerMode.allCases) { Text($0.title).tag($0) }
+            if show.showMode {
+                Picker("", selection: $timer.mode) {
+                    ForEach(TimerMode.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
 
-            if timer.mode == .countdown {
+            if show.showDuration, timer.mode == .countdown {
                 HStack(spacing: 6) {
                     ForEach(presets, id: \.self) { m in
                         Button("\(m)") { timer.countdownMinutes = m }
@@ -82,6 +89,7 @@ struct MenuBarPanel: View {
                 .font(.callout)
             }
 
+            if show.showCategory {
             VStack(alignment: .leading, spacing: 6) {
                 sectionLabel(tr("分类", "Category"))
                 FlowLayout(spacing: 6, centered: false) {
@@ -99,8 +107,12 @@ struct MenuBarPanel: View {
                 }
                 .font(.callout)
             }
+            }
 
+            // 三项都隐藏时整组不渲染，避免留下空白
+            if show.showBlock || show.showStrict || show.showBreak {
             VStack(alignment: .leading, spacing: 8) {
+                if show.showBlock {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(tr("专注时锁定应用", "Block apps while focusing"))
@@ -122,7 +134,29 @@ struct MenuBarPanel: View {
                     .buttonStyle(.link)
                     .font(.caption)
                 }
+                }
 
+                // 严格模式只对倒计时生效：倒计时结束前不能暂停、结束、放弃或退出
+                if show.showStrict {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(tr("严格模式", "Strict mode"))
+                        Text(timer.mode == .countdown
+                             ? tr("倒计时结束前不能暂停、结束或退出", "Can't pause, stop or quit until it ends")
+                             : tr("只对倒计时生效", "Countdown only"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Toggle("", isOn: $store.settings.strictMode)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .disabled(timer.mode != .countdown)
+                }
+                }
+
+                if show.showBreak {
                 HStack {
                     Text(tr("专注后休息", "Break after focus"))
                     Spacer()
@@ -138,8 +172,10 @@ struct MenuBarPanel: View {
                         .toggleStyle(.switch)
                         .controlSize(.small)
                 }
+                }
             }
             .font(.callout)
+            }
 
             Button {
                 timer.start()
@@ -173,9 +209,12 @@ struct MenuBarPanel: View {
             }
 
             HStack(spacing: 6) {
-                CategoryDot(hex: store.categoryColorHex(timer.categoryId), size: 8)
-                Text(store.categoryName(timer.categoryId)).fontWeight(.medium)
-                Text("· " + (timer.state == .paused ? tr("已暂停", "Paused") : tr("专注中", "Focusing")))
+                if show.showCategory {
+                    CategoryDot(hex: store.categoryColorHex(timer.categoryId), size: 8)
+                    Text(store.categoryName(timer.categoryId)).fontWeight(.medium)
+                    Text("·").foregroundStyle(.secondary)
+                }
+                Text(timer.state == .paused ? tr("已暂停", "Paused") : tr("专注中", "Focusing"))
                     .foregroundStyle(.secondary)
                 if timer.mode == .countdown {
                     Text("· " + tr("目标 \(Int(timer.targetSeconds / 60)) 分钟", "Goal \(Int(timer.targetSeconds / 60)) min"))
@@ -184,7 +223,7 @@ struct MenuBarPanel: View {
             }
             .font(.callout)
 
-            if blocker.isActive {
+            if show.showBlock, blocker.isActive {
                 Label(tr("正在锁定 \(store.blockedApps.count) 个应用 · 已拦截 \(blocker.blockedCount) 次",
                          "Blocking \(store.blockedApps.count) apps · \(blocker.blockedCount) blocked"),
                       systemImage: "lock.fill")
